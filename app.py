@@ -6,8 +6,11 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import sqlite3
 
+STOCK_DATA_DB = 'stock_data_mock.db'
+
 def get_stock_data():
-    conn = sqlite3.connect('stock_data.db')
+    conn = sqlite3.connect(STOCK_DATA_DB)
+    print(f"Connected to {STOCK_DATA_DB}")
     query = "SELECT ticker, date, sentiment_score, closing_price FROM stock_sentiment"
     df = pd.read_sql(query, conn)
     conn.close()

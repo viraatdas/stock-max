@@ -4,11 +4,13 @@ import numpy as np
 import os
 
 # Delete existing database if it exists
-if os.path.exists('stock_data.db'):
-    os.remove('stock_data.db')
+
+STOCK_DATA_DB = 'stock_data_mock.db'
+if os.path.exists(STOCK_DATA_DB):
+    os.remove(STOCK_DATA_DB)
 
 # Create connection to SQLite database
-conn = sqlite3.connect('stock_data.db')
+conn = sqlite3.connect(STOCK_DATA_DB)
 
 # Generate mock stock sentiment data
 tickers = ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META', 'TSLA', 'AMD', 'INTC']
