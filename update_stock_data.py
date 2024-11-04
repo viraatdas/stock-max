@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import numpy as np
 from typing import List, Dict, Optional
 import logging
+from env import NEWS_API_KEY, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
 
 # Setup logging with more detailed format
 logging.basicConfig(
@@ -13,42 +14,102 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+import re
+import pandas as pd
+import yfinance as yf
+import logging
+from typing import List, Set
+import praw  # Python Reddit API Wrapper
+import requests
+
 class TickerFetcher:
     """Handles fetching and managing lists of tickers"""
     
     @staticmethod
     def fetch_market_tickers() -> List[str]:
-        """Fetch tickers from market/internet source"""
-        logger.info("Starting market ticker fetch")
-        
-        # Placeholder tickers
-        tickers = ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META', 'TSLA', 'AMD', 'INTC']
-        
-        logger.info(f"Fetched {len(tickers)} market tickers")
-        return tickers
-    
+        """
+        Fetch tickers that are currently being mentioned on Reddit's WallStreetBets
+        and in recent news articles, indicating potential volatility.
+        """
+        logger = logging.getLogger(__name__)
+        logger.info("Starting market ticker fetch from Reddit and News")
+
+        # tickers_from_reddit = TickerFetcher.fetch_tickers_from_reddit()
+        tickers_from_news = TickerFetcher.fetch_tickers_from_news()
+
+        combined_tickers = list(set(tickers_from_news + tickers_from_news))
+        logger.info(f"Fetched {len(combined_tickers)} unique tickers from Reddit and News")
+        return combined_tickers
+
     @staticmethod
-    def get_db_tickers(db_path: str) -> List[str]:
-        """Get existing tickers from database"""
-        print(f"Fetching existing tickers from {db_path}")
+    def fetch_tickers_from_reddit() -> List[str]:
+        """Fetch tickers mentioned in recent posts on r/WallStreetBets"""
+        logger = logging.getLogger(__name__)
+        logger.info("Fetching tickers from Reddit's r/WallStreetBets")
+
+        # Initialize Reddit API client
+        reddit = praw.Reddit(
+            client_id=REDDIT_CLIENT_ID,
+            client_secret=REDDIT_CLIENT_SECRET,
+            user_agent=REDDIT_USER_AGENT
+        )
+
+        subreddit = reddit.subreddit('wallstreetbets')
+        hot_posts = subreddit.hot(limit=100)
+
+        potential_tickers = set()
+        ticker_pattern = re.compile(r'\b[A-Z]{1,5}\b')  # Pattern for tickers (1-5 uppercase letters)
+
+        for post in hot_posts:
+            tickers_in_title = ticker_pattern.findall(post.title)
+            tickers_in_selftext = ticker_pattern.findall(post.selftext)
+            all_tickers = tickers_in_title + tickers_in_selftext
+
+            for ticker in all_tickers:
+                if TickerFetcher.is_valid_ticker(ticker):
+                    potential_tickers.add(ticker)
+
+        logger.info(f"Found {len(potential_tickers)} tickers on Reddit")
+        return list(potential_tickers)
+
+    @staticmethod
+    def fetch_tickers_from_news() -> List[str]:
+        """Fetch tickers mentioned in recent financial news articles"""
+        logger = logging.getLogger(__name__)
+        logger.info("Fetching tickers from recent news articles")
+
+        url = ('https://newsapi.org/v2/everything?'
+               'q=stocks OR shares OR market&'
+               'language=en&'
+               'sortBy=publishedAt&'
+               f'apiKey={NEWS_API_KEY}')
+
+        response = requests.get(url)
+        articles = response.json().get('articles', [])
+        print(articles)
+
+        potential_tickers = set()
+        ticker_pattern = re.compile(r'\b[A-Z]{1,5}\b')  # Pattern for tickers (1-5 uppercase letters)
+
+        for article in articles:
+            content = article.get('title', '') + ' ' + article.get('description', '')
+            tickers_in_content = ticker_pattern.findall(content)
+
+            for ticker in tickers_in_content:
+                if TickerFetcher.is_valid_ticker(ticker):
+                    potential_tickers.add(ticker)
+
+        logger.info(f"Found {len(potential_tickers)} tickers in news articles")
+        return list(potential_tickers)
+
+    @staticmethod
+    def is_valid_ticker(ticker: str) -> bool:
+        """Check if the ticker is valid using yfinance"""
         try:
-            conn = sqlite3.connect(db_path)
-            existing_df = pd.read_sql("SELECT DISTINCT ticker FROM stock_sentiment", conn)
-            conn.close()
-            
-            tickers = existing_df['ticker'].tolist()
-            logger.info(f"Found {len(tickers)} existing tickers in DB: {tickers}")
-            return tickers
-        except Exception as e:
-            logger.error(f"Error fetching DB tickers: {e}")
-            return []
-    
-    @staticmethod
-    def combine_tickers(market_tickers: List[str], db_tickers: List[str]) -> List[str]:
-        """Combine and deduplicate tickers"""
-        combined = list(set(market_tickers + db_tickers))
-        print(f"Combined {len(combined)} unique tickers: {combined}")
-        return combined
+            ticker_info = yf.Ticker(ticker).info
+            return 'regularMarketPrice' in ticker_info
+        except Exception:
+            return False
 
 class StockDataCollector:
     """Handles collecting stock data and sentiment analysis"""
