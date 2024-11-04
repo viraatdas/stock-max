@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Sentiment Table</title>
+    <style>
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 8px; text-align: left; border: 1px solid #ddd; }
+        th { background-color: #f4f4f4; }
+    </style>
+</head>
+<body>
+    <h1>Stock Sentiment Table</h1>
+    <table>
+        <tr>
+            <th>Ticker</th>
+            <th>Latest Sentiment Score</th>
+            <th>Latest Trade Suggestion</th>
+            <th>Action</th>
+        </tr>
+        {% for row in data %}
+        <tr>
+            <td>{{ row['ticker'] }}</td>
+            <td>{{ row['sentiment_score'] }}</td>
+            <td>{{ row['trade_suggestion'] }}</td>
+            <td><a href="/dashboard/?ticker={{ row['ticker'] }}">View Details</a></td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>
