@@ -100,7 +100,7 @@ class DatabaseManager:
             logger.error(f"Database update error: {e}")
             return False
 
-def update_stock_data(db_path: str = 'stock_data_mock.db') -> None:
+def update_stock_data(db_path: str) -> None:
     """Main function to update stock data"""
     logger.info("Starting Stock Data Update")
     # Initialize components
@@ -140,5 +140,6 @@ def update_stock_data(db_path: str = 'stock_data_mock.db') -> None:
 
 if __name__ == "__main__":
     logger.info("Starting script")
-    update_stock_data()
+    STOCK_DATA_DB = 'stock_data_mock.db'
+    update_stock_data(STOCK_DATA_DB)
     logger.info("Script complete")

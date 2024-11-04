@@ -6,7 +6,10 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import sqlite3
 
+from update_stock_data import update_stock_data
+
 STOCK_DATA_DB = 'stock_data_mock.db'
+# update_stock_data(STOCK_DATA_DB)
 
 def get_stock_data():
     conn = sqlite3.connect(STOCK_DATA_DB)
