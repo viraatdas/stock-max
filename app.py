@@ -13,16 +13,45 @@ def get_stock_data():
     conn.close()
     return df
 
+def get_latest_sentiments():
+    df = get_stock_data()
+    # Get the latest entry for each ticker
+    latest = df.sort_values('date').groupby('ticker').last()
+    # Sort by sentiment score in descending order
+    return latest.sort_values('sentiment_score', ascending=False)
+
 app = dash.Dash(__name__)
+
+# Get latest sentiment scores for dropdown and sort by sentiment
+latest_data = get_latest_sentiments()
+def format_sentiment(ticker, score):
+    """Format sentiment with color and +/- sign"""
+    sign = '+' if score > 0 else ''
+    return f"{ticker:4} │ {sign} {score:.3f}"
+
+app = dash.Dash(__name__)
+app.scripts.config.serve_locally = True
+
+# Get latest sentiment scores for dropdown
+latest_data = get_latest_sentiments()
+dropdown_options = [
+    {'label': format_sentiment(ticker, latest_data.loc[ticker, 'sentiment_score']), 
+     'value': ticker} 
+    for ticker in latest_data.index
+]
 
 app.layout = html.Div([
     html.H1("Stock Catalyst Tracker"),
     
-    dcc.Dropdown(
-        id='stock-selector',
-        options=[{'label': ticker, 'value': ticker} for ticker in get_stock_data()['ticker'].unique()],
-        value='AAPL'
-    ),
+    html.Div([
+        html.Label("Select Stock (sorted by sentiment score):", style={'fontWeight': 'bold'}),
+        dcc.Dropdown(
+            id='stock-selector',
+            options=dropdown_options,
+            value=dropdown_options[0]['value'],
+            style={'width': '400px'}
+        ),
+    ], style={'margin': '20px 0'}),
     
     dcc.Graph(id='sentiment-price-chart'),
 ])
