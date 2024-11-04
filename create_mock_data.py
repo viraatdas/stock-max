@@ -1,7 +1,11 @@
 import sqlite3
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+import os
+
+# Delete existing database if it exists
+if os.path.exists('stock_data.db'):
+    os.remove('stock_data.db')
 
 # Create connection to SQLite database
 conn = sqlite3.connect('stock_data.db')
@@ -22,8 +26,7 @@ for ticker in tickers:
             'ticker': ticker,
             'date': date,
             'sentiment_score': sentiment_score,
-            'volume': volume,
-            'price': price,
+            'closing_price': price,
             'catalyst_type': catalyst_type
         })
 

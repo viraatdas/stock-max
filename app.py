@@ -1,28 +1,20 @@
 import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output
-import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import pandas as pd
 import sqlite3
 
-# Initialize Dash app
-app = dash.Dash(__name__)
-
 def get_stock_data():
     conn = sqlite3.connect('stock_data.db')
-    query = "SELECT * FROM stock_sentiment"
+    query = "SELECT ticker, date, sentiment_score, closing_price FROM stock_sentiment"
     df = pd.read_sql(query, conn)
     conn.close()
     return df
 
-def get_upcoming_catalysts():
-    conn = sqlite3.connect('stock_data.db')
-    query = "SELECT * FROM upcoming_catalysts"
-    df = pd.read_sql(query, conn)
-    conn.close()
-    return df
+app = dash.Dash(__name__)
 
-# Layout
 app.layout = html.Div([
     html.H1("Stock Catalyst Tracker"),
     
@@ -33,43 +25,55 @@ app.layout = html.Div([
     ),
     
     dcc.Graph(id='sentiment-price-chart'),
-    
-    html.H2("Upcoming Catalysts"),
-    html.Div(id='catalyst-table')
 ])
 
 @app.callback(
-    [Output('sentiment-price-chart', 'figure'),
-     Output('catalyst-table', 'children')],
+    Output('sentiment-price-chart', 'figure'),
     [Input('stock-selector', 'value')]
 )
-def update_charts(selected_ticker):
+def update_chart(selected_ticker):
     # Get stock data
     df = get_stock_data()
     df_filtered = df[df['ticker'] == selected_ticker]
     
-    # Create price and sentiment chart
-    fig = px.line(df_filtered, x='date', y=['price', 'sentiment_score'], 
-                  title=f'{selected_ticker} Price and Sentiment')
+    # Create figure with secondary y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
     
-    # Get upcoming catalysts
-    catalysts_df = get_upcoming_catalysts()
-    catalysts_filtered = catalysts_df[catalysts_df['ticker'] == selected_ticker]
+    # Add price line on primary y-axis
+    fig.add_trace(
+        go.Scatter(
+            x=df_filtered['date'],
+            y=df_filtered['closing_price'],
+            name="Price ($)",
+            line=dict(color='blue')
+        ),
+        secondary_y=False
+    )
     
-    # Create catalyst table
-    catalyst_table = html.Table([
-        html.Thead(html.Tr([html.Th(col) for col in ['Date', 'Type', 'Impact Score', 'Description']])),
-        html.Tbody([
-            html.Tr([
-                html.Td(row['date']),
-                html.Td(row['catalyst_type']),
-                html.Td(f"{row['impact_score']:.2f}"),
-                html.Td(row['description'])
-            ]) for _, row in catalysts_filtered.iterrows()
-        ])
-    ])
+    # Add sentiment score line on secondary y-axis
+    fig.add_trace(
+        go.Scatter(
+            x=df_filtered['date'],
+            y=df_filtered['sentiment_score'],
+            name="Sentiment Score",
+            line=dict(color='red')
+        ),
+        secondary_y=True
+    )
     
-    return fig, catalyst_table
+    # Update layout
+    fig.update_layout(
+        title=f'{selected_ticker} Price vs Sentiment',
+        xaxis_title="Date",
+        hovermode='x unified',
+        showlegend=True
+    )
+    
+    # Update y-axes labels
+    fig.update_yaxes(title_text="Price ($)", secondary_y=False)
+    fig.update_yaxes(title_text="Sentiment Score (-1 to 1)", secondary_y=True)
+    
+    return fig
 
 if __name__ == '__main__':
-    app.run_server(debug=True) 
+    app.run_server(debug=True)
