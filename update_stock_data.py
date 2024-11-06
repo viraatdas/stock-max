@@ -1,11 +1,13 @@
+import json
 import sqlite3
+from groq import Groq
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 import numpy as np
 from typing import List, Dict, Optional
 import logging
-from env import NEWS_API_KEY, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
+from env import FMP_API_KEY, FMP_BASE_URL, GROQ_API_KEY, NEWS_API_KEY, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_PASSWORD, REDDIT_USER_AGENT, REDDIT_USERNAME
 
 # Setup logging with more detailed format
 logging.basicConfig(
@@ -19,11 +21,82 @@ import pandas as pd
 import yfinance as yf
 import logging
 from typing import List, Set
-import praw  # Python Reddit API Wrapper
+import praw
 import requests
 
 class TickerFetcher:
     """Handles fetching and managing lists of tickers"""
+
+    # Common words and invalid patterns to filter out
+    COMMON_WORDS = {
+        'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 
+        'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+        'THE', 'AND', 'FOR', 'NEW', 'CEO', 'CFO', 'IPO', 'USA', 'GDP',
+        'AI', 'API', 'SEC', 'FDA', 'NYSE', 'ETF', 'ESG', 'CEO', 'CTO',
+        'RSS', 'HTTP', 'HTML', 'XML', 'JSON', 'USD', 'EUR', 'GBP',
+        'Q1', 'Q2', 'Q3', 'Q4', 'YTD', 'TTM', 'EPS', 'PE', 'ROI',
+        'EBIT', 'GAAP', 'IMO', 'TBH', 'FOMO', 'YOLO', 'HODL',
+        'DD', 'PR', 'IR', 'CEO', 'COO', 'CTO', 'CFO', 'CMO',
+        'BOND', 'CASH', 'LOAN', 'DEBT', 'GAIN', 'LOSS'
+    }
+
+    @staticmethod
+    def clean_ticker(ticker: str) -> str:
+        """
+        Clean and validate a ticker symbol
+        Returns empty string if invalid
+        """
+        try:
+            # Remove common prefixes/suffixes and whitespace
+            cleaned = ticker.strip('$£€¥').strip()
+            cleaned = cleaned.split('.')[0]  # Remove exchange suffixes like .L, .DE
+            cleaned = cleaned.split(':')[0]  # Remove exchange prefixes like NYSE:
+            cleaned = cleaned.split('-')[0]  # Remove share class suffixes
+            
+            cleaned = cleaned.strip('$').strip()
+            
+            # Basic validation
+            if not cleaned:
+                return ''
+            if cleaned in TickerFetcher.COMMON_WORDS:
+                return ''
+            if len(cleaned) > 5:  # Most tickers are 1-5 characters
+                return ''
+            if not cleaned.isalpha():  # Should only contain letters
+                return ''
+            if not cleaned.isupper():  # Should be all uppercase
+                return ''
+                
+            return cleaned
+            
+        except Exception as e:
+            logger.debug(f"Error cleaning ticker {ticker}: {e}")
+            return ''
+
+    @staticmethod
+    def get_db_tickers(db_path: str) -> List[str]:
+        """Get existing tickers from database"""
+        try:
+            conn = sqlite3.connect(db_path)
+            query = "SELECT DISTINCT ticker FROM stock_sentiment"
+            existing_df = pd.read_sql(query, conn)
+            conn.close()
+            
+            db_tickers = existing_df['ticker'].tolist()
+            logger.info(f"Found {len(db_tickers)} existing tickers in database")
+            return db_tickers
+            
+        except Exception as e:
+            logger.error(f"Error fetching DB tickers: {e}")
+            return []
+            
+    # Also add this method since it's called but missing
+    @staticmethod
+    def combine_tickers(market_tickers: List[str], db_tickers: List[str]) -> List[str]:
+        """Combine and deduplicate tickers from different sources"""
+        combined = list(set(market_tickers + db_tickers))
+        logger.info(f"Combined {len(combined)} unique tickers from all sources")
+        return combined
     
     @staticmethod
     def fetch_market_tickers() -> List[str]:
@@ -34,18 +107,19 @@ class TickerFetcher:
         logger = logging.getLogger(__name__)
         logger.info("Starting market ticker fetch from Reddit and News")
 
-        # tickers_from_reddit = TickerFetcher.fetch_tickers_from_reddit()
-        tickers_from_news = TickerFetcher.fetch_tickers_from_news()
+        tickers_from_reddit = TickerFetcher.fetch_tickers_from_reddit()
+        # tickers_from_news = TickerFetcher.fetch_tickers_from_news()
 
-        combined_tickers = list(set(tickers_from_news + tickers_from_news))
+        combined_tickers = list(set(tickers_from_reddit))
+        logger.info(f"Combined tickers: {combined_tickers}")
         logger.info(f"Fetched {len(combined_tickers)} unique tickers from Reddit and News")
         return combined_tickers
 
     @staticmethod
     def fetch_tickers_from_reddit() -> List[str]:
-        """Fetch tickers mentioned in recent posts on r/WallStreetBets"""
+        """Fetch tickers mentioned in recent posts from multiple investing subreddits"""
         logger = logging.getLogger(__name__)
-        logger.info("Fetching tickers from Reddit's r/WallStreetBets")
+        logger.info("Fetching tickers from Reddit investing subreddits")
 
         # Initialize Reddit API client
         reddit = praw.Reddit(
@@ -54,22 +128,42 @@ class TickerFetcher:
             user_agent=REDDIT_USER_AGENT
         )
 
-        subreddit = reddit.subreddit('wallstreetbets')
-        hot_posts = subreddit.hot(limit=100)
+        subreddits = ['wallstreetbets', 'smallstreetbets', 
+                    'pennystocks', 'spacs', 
+                    'dividends', 'biotechstocks',
+                    'investing', 'stocks']
 
         potential_tickers = set()
         ticker_pattern = re.compile(r'\b[A-Z]{1,5}\b')  # Pattern for tickers (1-5 uppercase letters)
 
-        for post in hot_posts:
-            tickers_in_title = ticker_pattern.findall(post.title)
-            tickers_in_selftext = ticker_pattern.findall(post.selftext)
-            all_tickers = tickers_in_title + tickers_in_selftext
+        all_found_tickers = set()
+        for subreddit_name in subreddits:
+            try:
+                subreddit = reddit.subreddit(subreddit_name)
+                hot_posts = subreddit.hot(limit=50)  # Reduced limit per subreddit
 
-            for ticker in all_tickers:
-                if TickerFetcher.is_valid_ticker(ticker):
-                    potential_tickers.add(ticker)
+                for post in hot_posts:
+                    # Clean tickers as we find them
+                    tickers_in_title = [
+                        t for t in ticker_pattern.findall(post.title)
+                        if TickerFetcher.clean_ticker(t)
+                    ]
+                    tickers_in_selftext = [
+                        t for t in ticker_pattern.findall(post.selftext)
+                        if TickerFetcher.clean_ticker(t)
+                    ]
+                    all_tickers = tickers_in_title + tickers_in_selftext
+                    all_found_tickers.update(all_tickers)
 
-        logger.info(f"Found {len(potential_tickers)} tickers on Reddit")
+            except Exception as e:
+                logger.error(f"Error fetching from r/{subreddit_name}: {str(e)}")
+                continue
+
+        if all_found_tickers:  # Only make API call if any tickers were found
+            valid_tickers = TickerFetcher.are_valid_tickers(list(all_found_tickers))
+            potential_tickers.update(valid_tickers.keys())
+
+        logger.info(f"Found {len(potential_tickers)} unique tickers across {len(subreddits)} subreddits")
         return list(potential_tickers)
 
     @staticmethod
@@ -94,33 +188,104 @@ class TickerFetcher:
         for article in articles:
             content = article.get('title', '') + ' ' + article.get('description', '')
             tickers_in_content = ticker_pattern.findall(content)
-
-            for ticker in tickers_in_content:
-                if TickerFetcher.is_valid_ticker(ticker):
-                    potential_tickers.add(ticker)
+            valid_tickers = TickerFetcher.are_valid_tickers(tickers_in_content)
+            for ticker in valid_tickers:
+                potential_tickers.add(ticker)
 
         logger.info(f"Found {len(potential_tickers)} tickers in news articles")
         return list(potential_tickers)
 
     @staticmethod
-    def is_valid_ticker(ticker: str) -> bool:
-        """Check if the ticker is valid using yfinance"""
+    def are_valid_tickers(tickers: List[str]) -> Dict[str, dict]:
+        """Check if multiple stock tickers are valid."""
+        # Clean and filter tickers
+        cleaned_tickers = []
+        for t in tickers:
+            clean_t = TickerFetcher.clean_ticker(t)
+            if clean_t:  # Only include non-empty cleaned tickers
+                cleaned_tickers.append(clean_t)
+        
+        if not cleaned_tickers:
+            return {}
+            
+        # Remove duplicates while preserving order
+        cleaned_tickers = list(dict.fromkeys(cleaned_tickers))
+        
+        # Log what we're about to validate
+        logger.info(f"Validating tickers: {cleaned_tickers}")
+        
+        # Make API call
+        tickers_str = ','.join(cleaned_tickers)
+        url = f"{FMP_BASE_URL}/quote/{tickers_str}?apikey={FMP_API_KEY}"
+        
         try:
-            ticker_info = yf.Ticker(ticker).info
-            return 'regularMarketPrice' in ticker_info
-        except Exception:
-            return False
+            response = requests.get(url)
+            response.raise_for_status()  # Raise exception for bad status codes
+            data = response.json()
+            
+            # Additional validation of response data
+            valid_tickers = {}
+            for stock in data:
+                symbol = stock.get('symbol', '')
+                if symbol and isinstance(stock.get('price'), (int, float)):
+                    valid_tickers[symbol] = stock
+            
+            logger.info(f"Found {len(valid_tickers)} valid tickers out of {len(cleaned_tickers)} tested")
+            return valid_tickers
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request failed: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"Error validating tickers: {e}")
+            return {}
 
 class StockDataCollector:
     """Handles collecting stock data and sentiment analysis"""
+
+
+    @staticmethod
+    def get_stock_news(ticker: str) -> str:
+        """Fetch recent news about the stock from Reddit"""
+        try:
+            # Initialize Reddit API client
+            reddit = praw.Reddit(
+                client_id=REDDIT_CLIENT_ID,
+                client_secret=REDDIT_CLIENT_SECRET,
+                user_agent=REDDIT_USER_AGENT
+            )
+
+            # Subreddits relevant to stock discussion
+            subreddits = ['wallstreetbets', 'stocks', 'investing', 'pennystocks', 'smallstreetbets']
+            news_text = ""
+            
+            for subreddit_name in subreddits:
+                subreddit = reddit.subreddit(subreddit_name)
+                hot_posts = subreddit.search(f"{ticker}", limit=5)  # Search posts with ticker mention
+                
+                for post in hot_posts:
+                    news_text += f"Title: {post.title}\n"
+                    news_text += f"Description: {post.selftext[:200]}...\n\n"  # Limit description for readability
+                
+                if news_text:
+                    return news_text  # Return results if found in any subreddit
+
+            return f"No recent news found for {ticker} on Reddit."
+
+        except Exception as e:
+            logger.error(f"Error fetching Reddit news for {ticker}: {e}")
+            return f"Error fetching news for {ticker}"
     
     @staticmethod
     def get_stock_price(ticker: str) -> Optional[float]:
-        """Fetch current stock price"""
+        """Fetch current stock price.
+        Returns the most recent closing price, which is typically from the previous trading day
+        since markets close at 4pm ET."""
         print(f"\nFetching price for {ticker}...")
         try:
             stock = yf.Ticker(ticker)
             price = stock.history(period='1d')['Close'].iloc[-1]
+            print(f"Price: {price}")
             return price
         except Exception as e:
             logger.error(f"Error fetching price for {ticker}: {e}")
@@ -128,10 +293,69 @@ class StockDataCollector:
     
     @staticmethod
     def calculate_sentiment(ticker: str) -> Optional[float]:
-        """Calculate sentiment score"""
+        """Calculate sentiment score using Groq LLM"""
         try:
-            sentiment = np.random.normal(0.5, 0.2)
-            return sentiment
+            # Get news about the stock
+            news = StockDataCollector.get_stock_news(ticker)
+            
+            # Create Groq client
+            client = Groq(
+                api_key=GROQ_API_KEY
+            )
+            
+            # Construct the prompt
+            prompt = f"""
+            You are an expert stock market analyst who is tasked with analyzing the sentiment of a stock based on recent news.
+
+            You are smart and understand how different news can have different impacts on a stock's sentiment. Think deeply about the news and how different trigger factors can impact sentiment.
+
+            Based on the following news about {ticker}, analyze the overall sentiment and provide a single number between -1.0 (extremely negative) and +1.0 (extremely positive).
+            
+            News:
+            {news}
+            
+            Rules:
+            - Return ONLY a number between -1.0 and +1.0
+            - -1.0 means extremely negative sentiment
+            - 0.0 means neutral sentiment
+            - +1.0 means extremely positive sentiment
+            - Consider factors like financial performance, market reception, and future outlook focusing on the short term.
+            
+            Output your sentiment score as a json. This is the format of the json:
+            {{
+                "sentiment_score": <sentiment_score>,
+                "reasoning": <explanation of how you came up with the sentiment score>
+            }}
+            """
+            
+            # Get completion from Groq
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                model="mixtral-8x7b-32768",  # Using Mixtral for better analysis
+                temperature=0.1  # Low temperature for more consistent outputs
+            )
+            
+            # Extract the sentiment score
+            response = chat_completion.choices[0].message.content.strip()
+            
+            # Convert response to float
+            try:
+                sentiment = float(json.loads(response)['sentiment_score'])
+                reasoning = json.loads(response)['reasoning']
+                # Ensure the sentiment is within bounds
+                sentiment = max(-1.0, min(1.0, sentiment))
+                logger.info(f"Calculated sentiment for {ticker}: {sentiment}")
+                logger.info(f"Reasoning: {reasoning}")
+                return sentiment
+            except ValueError:
+                logger.error(f"Could not parse sentiment value from response: {response}")
+                return None
+                
         except Exception as e:
             logger.error(f"Error calculating sentiment for {ticker}: {e}")
             return None
@@ -183,6 +407,9 @@ def update_stock_data(db_path: str) -> None:
     for ticker in all_tickers:
         logger.info(f"Processing {ticker}")
         price = stock_collector.get_stock_price(ticker)
+        if price is None:
+            logger.error(f"No price found for {ticker}")
+            continue
         sentiment = stock_collector.calculate_sentiment(ticker)
         
         if price is not None and sentiment is not None:
