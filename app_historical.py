@@ -10,12 +10,7 @@ import time
 
 from update_stock_data import update_stock_data
 
-USE_MOCK_DATA = False
-
-if USE_MOCK_DATA:
-    STOCK_DATA_DB = 'stock_data_mock.db'
-else:
-    STOCK_DATA_DB = 'stock_data.db'
+STOCK_DATA_DB = 'stock_data_historical.db'
 
 app = dash.Dash(__name__)
 app.scripts.config.serve_locally = True
@@ -189,7 +184,6 @@ def update_chart(selected_ticker):
         return fig, f"Error: {str(e)}", []
 
 if __name__ == '__main__':
-    if USE_MOCK_DATA == False:
-        update_stock_data(STOCK_DATA_DB)
+
     
-    app.run_server(debug=True)
+    app.run_server(debug=True, port=8000)

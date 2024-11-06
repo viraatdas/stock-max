@@ -450,7 +450,7 @@ def update_stock_data(db_path: str) -> None:
     today = datetime.now().date()
     new_data = []
     
-    for ticker in all_tickers[:5]:
+    for ticker in all_tickers:
         logger.info(f"Processing {ticker}")
         price = stock_collector.get_stock_price(ticker)
         if price is None:
