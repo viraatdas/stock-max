@@ -323,7 +323,7 @@ class StockDataCollector:
             
             Output your sentiment score as a json. This is the format of the json:
             {{
-                "sentiment_score": <sentiment_score>,
+                "sentimentScore": <sentimentScore>,
                 "reasoning": <explanation of how you came up with the sentiment score>
             }}
             """
@@ -343,18 +343,39 @@ class StockDataCollector:
             # Extract the sentiment score
             response = chat_completion.choices[0].message.content.strip()
             
-            # Convert response to float
+            # Clean the response to get only the JSON part
             try:
-                sentiment = float(json.loads(response)['sentiment_score'])
-                reasoning = json.loads(response)['reasoning']
-                # Ensure the sentiment is within bounds
+                # Find the JSON object boundaries
+                start_idx = response.find('{')
+                end_idx = response.rfind('}') + 1
+                
+                if start_idx == -1 or end_idx == 0:
+                    logger.error(f"No JSON found in response: {response}")
+                    return 0.0, "Error: Invalid response format"
+                
+                # Extract just the JSON part
+                json_str = response[start_idx:end_idx]
+                
+                # Replace problematic characters
+                json_str = ''.join(char for char in json_str if ord(char) >= 32)
+                
+                # Parse the JSON
+                parsed_json = json.loads(json_str)
+                sentiment = float(parsed_json['sentimentScore'])
+                reasoning = parsed_json['reasoning']
+
+                # Ensure sentiment is within bounds
                 sentiment = max(-1.0, min(1.0, sentiment))
-                logger.info(f"Calculated sentiment for {ticker}: {sentiment}")
-                logger.info(f"Reasoning: {reasoning}")
-                return sentiment
-            except ValueError:
-                logger.error(f"Could not parse sentiment value from response: {response}")
-                return None
+                
+                logger.info(f"Parsed sentiment: {sentiment}")
+                logger.info(f"Parsed reasoning: {reasoning}")
+                
+                return sentiment, reasoning
+                
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                logger.error(f"Error parsing response: {response}")
+                logger.error(f"Error details: {str(e)}")
+                return 0.0, f"Error parsing sentiment: {str(e)}"
                 
         except Exception as e:
             logger.error(f"Error calculating sentiment for {ticker}: {e}")
@@ -365,6 +386,30 @@ class DatabaseManager:
     
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self.create_tables()  
+    
+    def create_tables(self):
+        """Create necessary database tables"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Create stock_sentiment table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS stock_sentiment (
+                    ticker TEXT,
+                    date DATE,
+                    sentimentScore REAL,
+                    reasoning TEXT,
+                    closingPrice REAL
+                )
+            """)
+            
+            conn.commit()
+            conn.close()
+            logger.info("Database tables created successfully")
+        except Exception as e:
+            logger.error(f"Error creating tables: {e}")
     
     def update_ticker_data(self, ticker_data: List[Dict]) -> bool:
         """Update database with new ticker data"""
@@ -385,6 +430,7 @@ class DatabaseManager:
             logger.error(f"Database update error: {e}")
             return False
 
+
 def update_stock_data(db_path: str) -> None:
     """Main function to update stock data"""
     logger.info("Starting Stock Data Update")
@@ -404,20 +450,21 @@ def update_stock_data(db_path: str) -> None:
     today = datetime.now().date()
     new_data = []
     
-    for ticker in all_tickers:
+    for ticker in all_tickers[:5]:
         logger.info(f"Processing {ticker}")
         price = stock_collector.get_stock_price(ticker)
         if price is None:
             logger.error(f"No price found for {ticker}")
             continue
-        sentiment = stock_collector.calculate_sentiment(ticker)
+        sentiment, reasoning = stock_collector.calculate_sentiment(ticker)
         
         if price is not None and sentiment is not None:
             new_data.append({
                 'ticker': ticker,
                 'date': today,
-                'sentiment_score': sentiment,
-                'closing_price': price
+                'sentimentScore': sentiment,  
+                'reasoning': reasoning,
+                'closingPrice': price
             })
             print(f"Added data for {ticker}")
     
