@@ -449,8 +449,10 @@ def update_stock_data(db_path: str) -> None:
     logger.info("Collecting data for tickers")
     today = datetime.now().date()
     new_data = []
-    
-    for ticker in all_tickers:
+
+    BATCH_SIZE = 5
+
+    for ticker in all_tickers[:50]:
         logger.info(f"Processing {ticker}")
         price = stock_collector.get_stock_price(ticker)
         if price is None:
@@ -467,10 +469,17 @@ def update_stock_data(db_path: str) -> None:
                 'closingPrice': price
             })
             print(f"Added data for {ticker}")
+        
+        if len(new_data) >= BATCH_SIZE:
+            # Update database
+            logger.info("Updating database")
+            success = db_manager.update_ticker_data(new_data)
+            logger.info(f"Updated {len(new_data)} tickers. Success: {success}")
+            new_data = []
     
     # Update database
     logger.info("Updating database")
-    success = db_manager.update_ticker_data(new_data)
+    success = db_manager.update_ticker_data(new_data) 
     logger.info(f"Updated {len(new_data)} tickers. Success: {success}")
 
 if __name__ == "__main__":

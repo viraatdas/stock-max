@@ -11,6 +11,7 @@ import time
 from update_stock_data import update_stock_data
 
 USE_MOCK_DATA = False
+UPDATE_STOCK_DATA = True
 
 if USE_MOCK_DATA:
     STOCK_DATA_DB = 'stock_data_mock.db'
@@ -189,7 +190,7 @@ def update_chart(selected_ticker):
         return fig, f"Error: {str(e)}", []
 
 if __name__ == '__main__':
-    if USE_MOCK_DATA == False:
+    if USE_MOCK_DATA == False and UPDATE_STOCK_DATA:
         update_stock_data(STOCK_DATA_DB)
     
     app.run_server(debug=True)
